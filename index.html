@@ -9,7 +9,6 @@
     <script src="https://cdn.sheetjs.com/xlsx-0.20.0/package/dist/xlsx.full.min.js"></script>
     <style>
         #reader { width: 100%; max-width: 450px; margin: auto; border-radius: 12px; overflow: hidden; border: 4px solid #3b82f6; }
-        /* Modificato per ospitare il tasto elimina gruppo */
         .dewey-header { background: #1e293b; color: white; padding: 8px 15px; font-weight: bold; border-radius: 6px; margin-top: 20px; font-size: 0.85rem; display: flex; justify-content: space-between; align-items: center; }
         #console { font-family: 'Courier New', monospace; font-size: 11px; background: #000; color: #00ff00; padding: 10px; border-radius: 8px; max-height: 150px; overflow-y: auto; border: 1px solid #333; }
     </style>
@@ -19,7 +18,7 @@
     <nav class="bg-blue-800 text-white p-4 shadow-lg sticky top-0 z-50">
         <div class="max-w-5xl mx-auto flex justify-between items-center">
             <h1 class="text-xl font-bold flex items-center gap-2"><span>📖</span> BiblioSBN</h1>
-            <div class="flex gap-2">
+            <div class="flex <gap-2">
                 <button onclick="exportXls()" class="bg-green-600 hover:bg-green-700 px-3 py-1.5 rounded text-xs font-bold uppercase">Esporta</button>
                 <label class="bg-white text-blue-800 px-3 py-1.5 rounded text-xs font-bold cursor-pointer uppercase">
                     Importa <input type="file" id="importFile" class="hidden" accept=".xlsx, .xls">
@@ -39,7 +38,6 @@
             <div class="bg-white p-5 rounded-2xl shadow-sm border border-slate-200 flex flex-col">
                 <h2 class="text-xs font-black text-slate-400 uppercase mb-3">Inserimento Manuale ISBN</h2>
                 <div class="flex gap-2 mb-4">
-                    <!-- AGGIUNTO: onkeydown per intercettare il tasto Invio -->
                     <input type="text" id="manualIsbn" placeholder="ISBN (es. 97888...)" 
                            onkeydown="if(event.key === 'Enter') manualSearch()"
                            class="flex-1 border-2 border-slate-100 rounded-lg px-4 py-2 focus:border-blue-500 outline-none">
@@ -57,6 +55,9 @@
     <script>
         let myLibrary = JSON.parse(localStorage.getItem('sbn_v5_lib')) || [];
         const proxy = "https://corsproxy.io/?";
+        
+        // NUOVO: Variabile per impedire scansioni multiple
+        let isProcessing = false;
 
         window.onload = () => {
             initScanner();
@@ -72,16 +73,24 @@
         function initScanner() {
             const html5QrCode = new Html5Qrcode("reader");
             html5QrCode.start({ facingMode: "environment" }, { fps: 10, qrbox: 250 }, 
-                (text) => { if (text.length >= 10) runSbnSearch(text); }
+                (text) => { 
+                    // Modificato: controlla se il sistema è occupato
+                    if (text.length >= 10 && !isProcessing) { 
+                        runSbnSearch(text); 
+                    } 
+                }
             ).catch(err => addLog("Errore camera: " + err, "red"));
         }
 
         function manualSearch() {
             const val = document.getElementById('manualIsbn').value.trim();
-            if (val) runSbnSearch(val);
+            if (val && !isProcessing) runSbnSearch(val);
         }
 
         async function runSbnSearch(isbn) {
+            // Blocca nuove scansioni
+            isProcessing = true; 
+            
             addLog(`Fase 1: Ricerca ISBN ${isbn}...`);
             document.getElementById('scanStatus').innerText = "Fase 1 in corso...";
 
@@ -97,9 +106,11 @@
                 } else {
                     addLog(`Nessun risultato per ISBN ${isbn}`, "orange");
                     document.getElementById('scanStatus').innerText = "Non trovato.";
+                    resetScannerDelay(); // Sblocca dopo errore
                 }
             } catch (err) {
                 addLog(`Errore Fase 1: ${err.message}`, "red");
+                resetScannerDelay(); // Sblocca dopo errore
             }
         }
 
@@ -115,9 +126,7 @@
 
                 if (!data.titolo) throw new Error("Record vuoto");
 
-                // --- LOGICA ESTRAZIONE DEWEY ---
                 let dewey = "NON CLASS.";
-                
                 if (data.classificazioneDewey) {
                     const d = data.classificazioneDewey;
                     if (Array.isArray(d) && d.length > 0) {
@@ -143,11 +152,25 @@
                 save();
                 addLog(`SUCCESSO: ${newBook.titolo.substring(0, 25)}...`);
                 document.getElementById('manualIsbn').value = "";
-                document.getElementById('scanStatus').innerText = "Aggiunto!";
+                document.getElementById('scanStatus').innerText = "Aggiunto! Attendi...";
+                
+                // Avvia il cooldown prima della prossima scansione
+                resetScannerDelay();
+
             } catch (err) {
                 addLog(`Errore Fase 2: ${err.message}`, "red");
                 document.getElementById('scanStatus').innerText = "Errore dati.";
+                resetScannerDelay();
             }
+        }
+
+        // NUOVO: Funzione per gestire il ritardo (3 secondi)
+        function resetScannerDelay() {
+            setTimeout(() => {
+                isProcessing = false;
+                document.getElementById('scanStatus').innerText = "Pronto per nuovo codice";
+                addLog("Scanner pronto.", "#3b82f6");
+            }, 3000); // 3000 millisecondi = 3 secondi
         }
 
         function save() {
@@ -155,7 +178,6 @@
             renderLibrary();
         }
 
-        // AGGIUNTO: Funzione per eliminare un intero gruppo Dewey
         function removeDeweyGroup(deweyKey) {
             if (confirm(`Sei sicuro di voler eliminare TUTTI i libri della classe Dewey: ${deweyKey}?`)) {
                 myLibrary = myLibrary.filter(book => book.dewey !== deweyKey);
@@ -185,7 +207,6 @@
             sortedKeys.forEach(key => {
                 const header = document.createElement('div');
                 header.className = 'dewey-header shadow-sm';
-                // AGGIUNTO: Tasto elimina gruppo nell'header
                 header.innerHTML = `
                     <span>Classe Dewey: ${key}</span>
                     <button onclick="removeDeweyGroup('${key}')" 
